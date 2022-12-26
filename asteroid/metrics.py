@@ -5,6 +5,7 @@ import traceback
 from typing import List
 from collections import Counter
 import pandas as pd
+from transformers import WavLMForCTC, Wav2Vec2Processor
 import numpy as np
 from pb_bss_eval import InputMetrics, OutputMetrics
 import torch.nn as nn
@@ -250,7 +251,7 @@ class WERTracker:
                 jiwer.RemovePunctuation(),
                 jiwer.RemoveMultipleSpaces(),
                 jiwer.Strip(),
-                jiwer.SentencesToListOfWords(),
+                jiwer.ReduceToListOfListOfWords(),
                 jiwer.RemoveEmptyStrings(),
             ]
         )
@@ -422,3 +423,192 @@ class F1Tracker(nn.Module):
             "recall": float(recall),
             "f1_score": float(f1),
         }
+
+
+##################
+##################
+
+class WERTrackerWavLM:
+    """Word Error Rate Tracker. Subject to change.
+
+    Args:
+        model_name (str): Name of the petrained model to use.
+        trans_df (dataframe): Containing field `utt_id` and `text`.
+            See librimix/ConvTasNet recipe.
+        use_gpu (bool): Whether to use GPU for forward caculation.
+    """
+
+    def __init__(self, model_name, trans_df, sample_rate, use_gpu=True):
+        
+        import jiwer
+
+        self.model_name = model_name
+        self.device = "cuda" if use_gpu else "cpu"
+        self.model = WavLMForCTC.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-base-plus").to(self.device)
+        self.processor = Wav2Vec2Processor.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-base-plus")
+        self.input_txt_list = []
+        self.clean_txt_list = []
+        self.output_txt_list = []
+        self.transcriptions = []
+        self.true_txt_list = []
+        self.sample_rate = sample_rate
+        self.trans_df = trans_df
+        self.trans_dic = self._df_to_dict(trans_df)
+        self.mix_counter = Counter()
+        self.clean_counter = Counter()
+        self.est_counter = Counter()
+        self.transformation = jiwer.Compose(
+            [
+                jiwer.ToLowerCase(),
+                jiwer.RemovePunctuation(),
+                jiwer.RemoveMultipleSpaces(),
+                jiwer.Strip(),
+                jiwer.ReduceToListOfListOfWords(),
+            ]
+        )
+
+    def __call__(
+        self,
+        *,
+        mix: np.ndarray,
+        clean: np.ndarray,
+        estimate: np.ndarray,
+        sample_rate: int,
+        wav_id: List[str],
+    ):
+        """Compute and store best hypothesis for the mixture and the estimates"""
+        if sample_rate != self.sample_rate:
+            mix, clean, estimate = self.resample(
+                mix, clean, estimate, fs_from=sample_rate, fs_to=self.sample_rate
+            )
+        local_mix_counter = Counter()
+        local_clean_counter = Counter()
+        local_est_counter = Counter()
+        # Count the mixture output for each speaker
+        txt = self.predict_hypothesis(mix)
+
+        # Dict to gather transcriptions and IDs
+        trans_dict = dict(mixture_txt={}, clean={}, estimates={}, truth={})
+        # Get mixture transcription
+        trans_dict["mixture_txt"] = txt
+        #  Get ground truth transcription and IDs
+        for i, tmp_id in enumerate(wav_id):
+            trans_dict["truth"][f"utt_id_{i}"] = tmp_id
+            trans_dict["truth"][f"txt_{i}"] = self.trans_dic[tmp_id]
+            self.true_txt_list.append(dict(utt_id=tmp_id, text=self.trans_dic[tmp_id]))
+        # Mixture
+        for tmp_id in wav_id:
+            out_count = Counter(
+                self.hsdi(
+                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+                )
+            )
+            self.mix_counter += out_count
+            local_mix_counter += out_count
+            self.input_txt_list.append(dict(utt_id=tmp_id, text=txt))
+        # Average WER for the clean pair
+        for i, (wav, tmp_id) in enumerate(zip(clean, wav_id)):
+            txt = self.predict_hypothesis(wav)
+            out_count = Counter(
+                self.hsdi(
+                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+                )
+            )
+            self.clean_counter += out_count
+            local_clean_counter += out_count
+            self.clean_txt_list.append(dict(utt_id=tmp_id, text=txt))
+            trans_dict["clean"][f"utt_id_{i}"] = tmp_id
+            trans_dict["clean"][f"txt_{i}"] = txt
+        # Average WER for the estimate pair
+        for i, (est, tmp_id) in enumerate(zip(estimate, wav_id)):
+            txt = self.predict_hypothesis(est)
+            out_count = Counter(
+                self.hsdi(
+                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+                )
+            )
+            self.est_counter += out_count
+            local_est_counter += out_count
+            self.output_txt_list.append(dict(utt_id=tmp_id, text=txt))
+            trans_dict["estimates"][f"utt_id_{i}"] = tmp_id
+            trans_dict["estimates"][f"txt_{i}"] = txt
+        self.transcriptions.append(trans_dict)
+        return dict(
+            input_wer=self.wer_from_hsdi(**dict(local_mix_counter)),
+            clean_wer=self.wer_from_hsdi(**dict(local_clean_counter)),
+            wer=self.wer_from_hsdi(**dict(local_est_counter)),
+        )
+
+    @staticmethod
+    def wer_from_hsdi(hits=0, substitutions=0, deletions=0, insertions=0):
+        wer = (substitutions + deletions + insertions) / (hits + substitutions + deletions)
+        return wer
+
+    @staticmethod
+    def hsdi(truth, hypothesis, transformation):
+        from jiwer import compute_measures
+        keep = ["hits", "substitutions", "deletions", "insertions"]
+        out = compute_measures(
+            truth=truth,
+            hypothesis=hypothesis,
+            truth_transform=transformation,
+            hypothesis_transform=transformation,
+        ).items()
+        return {k: v for k, v in out if k in keep}
+
+    def predict_hypothesis(self, wav):
+        wav = torch.from_numpy(wav).to(self.device)
+        wav = wav.reshape((1, -1))
+        with torch.no_grad():
+            logits = self.model(wav).logits 
+
+        predicted_ids = torch.argmax(logits, dim=-1)
+        transcription = self.processor.batch_decode(predicted_ids)[0]
+        return transcription
+
+    @staticmethod
+    def resample(*wavs: np.ndarray, fs_from=None, fs_to=None):
+        from resampy import resample as _resample
+
+        return [_resample(w, sr_orig=fs_from, sr_new=fs_to) for w in wavs]
+
+    @staticmethod
+    def _df_to_dict(df):
+        return {k: v for k, v in zip(df["utt_id"].to_list(), df["text"].to_list())}
+
+    def final_df(self):
+        """Generate a MarkDown table, as done by ESPNet."""
+        mix_n_word = sum(self.mix_counter[k] for k in ["hits", "substitutions", "deletions"])
+        clean_n_word = sum(self.clean_counter[k] for k in ["hits", "substitutions", "deletions"])
+        est_n_word = sum(self.est_counter[k] for k in ["hits", "substitutions", "deletions"])
+        mix_wer = self.wer_from_hsdi(**dict(self.mix_counter))
+        clean_wer = self.wer_from_hsdi(**dict(self.clean_counter))
+        est_wer = self.wer_from_hsdi(**dict(self.est_counter))
+
+        mix_hsdi = [
+            self.mix_counter[k] for k in ["hits", "substitutions", "deletions", "insertions"]
+        ]
+        clean_hsdi = [
+            self.clean_counter[k] for k in ["hits", "substitutions", "deletions", "insertions"]
+        ]
+        est_hsdi = [
+            self.est_counter[k] for k in ["hits", "substitutions", "deletions", "insertions"]
+        ]
+        #                   Snt               Wrd         HSDI       Err     S.Err
+        for_mix = [len(self.mix_counter), mix_n_word] + mix_hsdi + [mix_wer, "-"]
+        for_clean = [len(self.clean_counter), clean_n_word] + clean_hsdi + [clean_wer, "-"]
+        for_est = [len(self.est_counter), est_n_word] + est_hsdi + [est_wer, "-"]
+
+        table = [
+            ["test_clean / mixture"] + for_mix,
+            ["test_clean / clean"] + for_clean,
+            ["test_clean / separated"] + for_est,
+        ]
+        df = pd.DataFrame(
+            table, columns=["dataset", "Snt", "Wrd", "Corr", "Sub", "Del", "Ins", "Err", "S.Err"]
+        )
+        return df
+
+    def final_report_as_markdown(self):
+        return self.final_df().to_markdown(index=False, tablefmt="github")
+
