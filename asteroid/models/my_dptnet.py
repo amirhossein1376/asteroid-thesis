@@ -1,10 +1,11 @@
 from asteroid_filterbanks import make_enc_dec
-from ..masknn import DPTransformerFlash
+from ..masknn import MyDPTransformer
 from .base_models import BaseEncoderMaskerDecoder
 
 
-class DPTNetFlash(BaseEncoderMaskerDecoder):
-    """
+class MyDPTNet(BaseEncoderMaskerDecoder):
+    """DPTNet separation model, as described in [1].
+
     Args:
         n_src (int): Number of masks to estimate.
         out_chan  (int or None): Number of bins in the estimated masks.
@@ -41,6 +42,11 @@ class DPTNetFlash(BaseEncoderMaskerDecoder):
         sample_rate (float): Sampling rate of the model.
         **fb_kwargs (dict): Additional kwards to pass to the filterbank
             creation.
+
+    References
+        - [1]: Jingjing Chen et al. "Dual-Path Transformer Network: Direct
+          Context-Aware Modeling for End-to-End Monaural Speech Separation"
+          Interspeech 2020.
     """
 
     def __init__(
@@ -82,7 +88,7 @@ class DPTNetFlash(BaseEncoderMaskerDecoder):
                 f"{n_feats} and {in_chan}"
             )
         # Update in_chan
-        masker = DPTransformerFlash(
+        masker = MyDPTransformer(
             n_feats,
             n_src,
             n_heads=n_heads,

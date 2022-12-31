@@ -2,15 +2,14 @@ from math import ceil
 import warnings
 
 import torch.nn as nn
-from torch.nn.modules.activation import MultiheadAttention
+from flash_pytorch import GAU
 from . import activations, norms
 import torch
-import time
 from ..utils import has_arg
 from ..dsp.overlap_add import DualPathProcessing
 
 
-class ImprovedTransformedLayerFlash(nn.Module):
+class MyImprovedTransformedLayer(nn.Module):
     """
     Improved Transformer module as used in [1].
     It is Multi-Head self-attention followed by LSTM, activation and linear projection layer.
@@ -42,9 +41,14 @@ class ImprovedTransformedLayerFlash(nn.Module):
         bidirectional=True,
         norm="gLN",
     ):
-        super(ImprovedTransformedLayerFlash, self).__init__()
-
-        self.mha = MultiheadAttention(embed_dim, n_heads, dropout=dropout)
+        super(MyImprovedTransformedLayer, self).__init__()
+        self.mha = GAU(
+            dim = embed_dim,
+            query_key_dim = embed_dim*2,     # query / key dimension
+            causal = False,           # autoregressive or not
+            expansion_factor = 2,    # hidden dimension = dim * expansion_factor
+            laplace_attn_fn = True   # new Mega paper claims this is more stable than relu squared as attention function
+        )
         self.dropout = nn.Dropout(dropout)
         self.recurrent = nn.LSTM(embed_dim, dim_ff, bidirectional=bidirectional, batch_first=True)
         ff_inner_dim = 2 * dim_ff if bidirectional else dim_ff
@@ -54,25 +58,25 @@ class ImprovedTransformedLayerFlash(nn.Module):
         self.norm_ff = norms.get(norm)(embed_dim)
 
     def forward(self, x):
-        s1 = x.shape
         tomha = x.permute(2, 0, 1)
         # x is batch, channels, seq_len
-        # mha is seq_len, batch, channels
+        # tomha is seq_len, batch, channels
         # self-attention is applied
-        out = self.mha(tomha, tomha, tomha)[0]
+        # x.shape = [1984, 64, 100]
+        out = self.mha(tomha)
+        
         x = self.dropout(out.permute(1, 2, 0)) + x
         x = self.norm_mha(x)
 
         # lstm is applied
         out = self.linear(self.dropout(self.activation(self.recurrent(x.transpose(1, -1))[0])))
         x = self.dropout(out.transpose(1, -1)) + x
-        s2 = x.shape
-        print(s1, tomha.shape)
         return self.norm_ff(x)
 
 
-class DPTransformerFlash(nn.Module):
-    """
+class MyDPTransformer(nn.Module):
+    """Dual-path Transformer introduced in [1].
+
     Args:
         in_chan (int): Number of input filters.
         n_src (int): Number of masks to estimate.
@@ -90,6 +94,11 @@ class DPTransformerFlash(nn.Module):
         bidirectional (bool, optional): True for bidirectional Inter-Chunk RNN
             (Intra-Chunk is always bidirectional).
         dropout (float, optional): Dropout ratio, must be in [0,1].
+
+    References
+        [1] Chen, Jingjing, Qirong Mao, and Dong Liu. "Dual-Path Transformer
+        Network: Direct Context-Aware Modeling for End-to-End Monaural Speech Separation."
+        arXiv (2020).
     """
 
     def __init__(
@@ -107,7 +116,7 @@ class DPTransformerFlash(nn.Module):
         bidirectional=True,
         dropout=0,
     ):
-        super(DPTransformerFlash, self).__init__()
+        super(MyDPTransformer, self).__init__()
         self.in_chan = in_chan
         self.n_src = n_src
         self.n_heads = n_heads
@@ -143,7 +152,7 @@ class DPTransformerFlash(nn.Module):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        ImprovedTransformedLayerFlash(
+                        MyImprovedTransformedLayer(
                             self.mha_in_dim,
                             self.n_heads,
                             self.ff_hid,
@@ -152,7 +161,7 @@ class DPTransformerFlash(nn.Module):
                             True,
                             self.norm_type,
                         ),
-                        ImprovedTransformedLayerFlash(
+                        MyImprovedTransformedLayer(
                             self.mha_in_dim,
                             self.n_heads,
                             self.ff_hid,
@@ -189,24 +198,31 @@ class DPTransformerFlash(nn.Module):
         """
         if self.input_layer is not None:
             mixture_w = self.input_layer(mixture_w.transpose(1, 2)).transpose(1, 2)
+        # mixture_w.shape = [32, 64, 2999]
         mixture_w = self.in_norm(mixture_w)  # [batch, bn_chan, n_frames]
         n_orig_frames = mixture_w.shape[-1]
 
         mixture_w = self.ola.unfold(mixture_w)
+        # mixture_w.shape = [32, 64, 100, 62]
         batch, n_filters, self.chunk_size, n_chunks = mixture_w.size()
-
+        
         for layer_idx in range(len(self.layers)):
             intra, inter = self.layers[layer_idx]
             mixture_w = self.ola.intra_process(mixture_w, intra)
             mixture_w = self.ola.inter_process(mixture_w, inter)
 
+        # mixture_w.shape = [32, 64, 100, 62]
         output = self.first_out(mixture_w)
+        # output.shape = [32, 128, 100, 62]
         output = output.reshape(batch * self.n_src, self.in_chan, self.chunk_size, n_chunks)
+        # output.shape = [64, 64, 100, 62]
         output = self.ola.fold(output, output_size=n_orig_frames)
-
+        # output.shape = [64, 64, 2999]
         output = self.net_out(output) * self.net_gate(output)
+        # output.shape = [64, 64, 2999]
         # Compute mask
         output = output.reshape(batch, self.n_src, self.in_chan, -1)
+        # output.shape = [32, 2, 64, 2999]
         est_mask = self.output_act(output)
         return est_mask
 

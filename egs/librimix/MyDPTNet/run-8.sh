@@ -32,7 +32,7 @@ out_dir=librimix # Controls the directory name associated to the evaluation resu
 
 # Training config
 epochs=200
-batch_size=32
+batch_size=16
 num_workers=10
 half_lr=yes
 early_stop=yes
@@ -49,6 +49,7 @@ task=sep_clean #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep
 
 
 eval_use_gpu=1
+eval_mode=max
 # Need to --compute_wer 1 --eval_mode max to be sure the user knows all the metrics
 # are for the all mode.
 compute_wer=1

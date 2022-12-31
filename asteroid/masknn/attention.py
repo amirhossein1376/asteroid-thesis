@@ -55,7 +55,7 @@ class ImprovedTransformedLayer(nn.Module):
     def forward(self, x):
         tomha = x.permute(2, 0, 1)
         # x is batch, channels, seq_len
-        # mha is seq_len, batch, channels
+        # tomha is seq_len, batch, channels
         # self-attention is applied
         out = self.mha(tomha, tomha, tomha)[0]
         x = self.dropout(out.permute(1, 2, 0)) + x
@@ -191,12 +191,14 @@ class DPTransformer(nn.Module):
         """
         if self.input_layer is not None:
             mixture_w = self.input_layer(mixture_w.transpose(1, 2)).transpose(1, 2)
+        # mixture_w.shape = [32, 64, 2999]
         mixture_w = self.in_norm(mixture_w)  # [batch, bn_chan, n_frames]
         n_orig_frames = mixture_w.shape[-1]
 
         mixture_w = self.ola.unfold(mixture_w)
+        # mixture_w.shape = [32, 64, 100, 62]
         batch, n_filters, self.chunk_size, n_chunks = mixture_w.size()
-
+        
         for layer_idx in range(len(self.layers)):
             intra, inter = self.layers[layer_idx]
             mixture_w = self.ola.intra_process(mixture_w, intra)

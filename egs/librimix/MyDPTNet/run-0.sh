@@ -52,7 +52,7 @@ eval_use_gpu=1
 eval_mode=max
 # Need to --compute_wer 1 --eval_mode max to be sure the user knows all the metrics
 # are for the all mode.
-compute_wer=0
+compute_wer=1
 
 . utils/parse_options.sh
 

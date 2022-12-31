@@ -210,15 +210,21 @@ class BaseEncoderMaskerDecoder(BaseModel):
             torch.Tensor, of shape (batch, n_src, time) or (n_src, time).
         """
         # Remember shape to shape reconstruction, cast to Tensor for torchscript
+        # wav.shape = [32, 48000]
         shape = jitable_shape(wav)
         # Reshape to (batch, n_mix, time)
         wav = _unsqueeze_to_3d(wav)
+        # wav.shape =  [32, 1, 48000]
 
         # Real forward
         tf_rep = self.forward_encoder(wav)
+        # tf_rep.shape = [32, 64, 2999]
         est_masks = self.forward_masker(tf_rep)
+        # est_masks.shape = [32, 2, 64, 2999]
         masked_tf_rep = self.apply_masks(tf_rep, est_masks)
+        # masked_tf_rep.shape = [32, 2, 64, 2999]
         decoded = self.forward_decoder(masked_tf_rep)
+        # decoded.shape = [32, 2, 48000]
 
         reconstructed = pad_x_to_y(decoded, wav)
         return _shape_reconstructed(reconstructed, shape)

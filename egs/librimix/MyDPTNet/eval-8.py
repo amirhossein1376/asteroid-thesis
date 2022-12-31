@@ -17,7 +17,7 @@ from asteroid import DPTNet
 from asteroid.models import save_publishable
 from asteroid.utils import tensors_to_device
 from asteroid.dsp.normalization import normalize_estimates
-from asteroid.metrics import WERTracker, MockWERTracker
+from asteroid.metrics import WERTrackerWavLM, MockWERTracker
 
 
 parser = argparse.ArgumentParser()
@@ -77,7 +77,7 @@ def main(conf):
     compute_metrics = update_compute_metrics(conf["compute_wer"], COMPUTE_METRICS)
     anno_df = pd.read_csv(Path("/mnt/new_drive/datasets/LibriSpeech/test_annotations.csv"))
     wer_tracker = (
-        MockWERTracker() if not conf["compute_wer"] else WERTracker(ASR_MODEL_PATH, anno_df)
+        MockWERTracker() if not conf["compute_wer"] else WERTrackerWavLM(ASR_MODEL_PATH, anno_df, conf["sample_rate"], process_before_transcription=True)
     )
     model_path = os.path.join(conf["exp_dir"], "best_model.pth")
     model = DPTNet.from_pretrained(model_path)

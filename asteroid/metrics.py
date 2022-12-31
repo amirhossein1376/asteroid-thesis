@@ -438,7 +438,7 @@ class WERTrackerWavLM:
         use_gpu (bool): Whether to use GPU for forward caculation.
     """
 
-    def __init__(self, model_name, trans_df, sample_rate, use_gpu=True):
+    def __init__(self, model_name, trans_df, sample_rate, process_before_transcription=False, use_gpu=True):
         
         import jiwer
 
@@ -452,6 +452,7 @@ class WERTrackerWavLM:
         self.transcriptions = []
         self.true_txt_list = []
         self.sample_rate = sample_rate
+        self.process_before_transcription = process_before_transcription
         self.trans_df = trans_df
         self.trans_dic = self._df_to_dict(trans_df)
         self.mix_counter = Counter()
@@ -557,8 +558,13 @@ class WERTrackerWavLM:
         return {k: v for k, v in out if k in keep}
 
     def predict_hypothesis(self, wav):
-        wav = torch.from_numpy(wav).to(self.device)
+        if self.process_before_transcription:
+            wav = self.processor(wav, sampling_rate=self.sample_rate, return_tensors="pt").input_values[0].to(self.device)
+        else:
+            wav = torch.from_numpy(wav).to(self.device)
+        
         wav = wav.reshape((1, -1))
+        
         with torch.no_grad():
             logits = self.model(wav).logits 
 

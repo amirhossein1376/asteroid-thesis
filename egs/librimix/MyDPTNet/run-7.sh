@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# In this script, I'm training a DPT model which takes wavlm representation of the mixture wavform
+# As the input and predicts the wavlm representation for each of the sources. 
+
 # Exit on error
 set -e
 set -o pipefail
@@ -44,7 +47,7 @@ mode=max #min
 eval_mode=max
 n_src=2 #1
 segment=3 # Minimum required seconds for each file
-task=sep_noisy #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep_noisy'
+task=sep_clean #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep_noisy'
 
 
 eval_use_gpu=1

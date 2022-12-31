@@ -304,9 +304,13 @@ class DualPathProcessing(nn.Module):
         # x is (batch, channels, chunk_size, n_chunks)
         batch, channels, chunk_size, n_chunks = x.size()
         # we reshape to batch*chunk_size, channels, n_chunks
+        # x.shape = [32, 64, 100, 62]
         x = x.transpose(1, -1).reshape(batch * n_chunks, chunk_size, channels).transpose(1, -1)
+        # x.shape = [1984, 64, 100]
         x = module(x)
+        # x.shape = [1984, 64, 100]
         x = x.reshape(batch, n_chunks, channels, chunk_size).transpose(1, -1).transpose(1, 2)
+        # x.shape = [32, 64, 100, 62]
         return x
 
     @staticmethod
@@ -329,7 +333,11 @@ class DualPathProcessing(nn.Module):
         """
 
         batch, channels, chunk_size, n_chunks = x.size()
+        # x.shape = [32, 64, 100, 62]
         x = x.transpose(1, 2).reshape(batch * chunk_size, channels, n_chunks)
+        # x.shape = [3200, 64, 62]
         x = module(x)
+        # x.shape = [3200, 64, 62]
         x = x.reshape(batch, chunk_size, channels, n_chunks).transpose(1, 2)
+        # x.shape = [32, 64, 100, 62]
         return x
