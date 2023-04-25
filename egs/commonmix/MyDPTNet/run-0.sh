@@ -10,7 +10,7 @@ set -o pipefail
 # If you haven't generated LibriMix start from stage 0
 # Main storage directory. You'll need disk space to store LibriSpeech, WHAM noises
 # and LibriMix. This is about 500 Gb
-storage_dir=/mnt/new_drive/datasets/Libri2Mix
+storage_dir=/mnt/new_drive/datasets/Common2Mix
 
 # After running the recipe a first time, you can run it from stage 3 directly to train new models.
 
@@ -22,16 +22,16 @@ python_path=python
 # ./run.sh --stage 3 --tag my_tag --task sep_noisy --id 0,1
 
 # General
-stage=3  # Controls from which stage to start
-tag="try-0"  # Controls the directory name associated to the experiment
+stage=0  # Controls from which stage to start
+tag="try-10"  # Controls the directory name associated to the experiment
 # You can ask for several GPUs using id (passed to CUDA_VISIBLE_DEVICES)
 id=0
-out_dir=librimix # Controls the directory name associated to the evaluation results inside the experiment directory
+out_dir=commonmix # Controls the directory name associated to the evaluation results inside the experiment directory
 
 # Network config
 
 # Training config
-epochs=200
+epochs=150
 batch_size=32
 num_workers=10
 half_lr=yes
@@ -48,7 +48,7 @@ segment=3 # Minimum required seconds for each file
 task=sep_clean #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep_noisy'
 
 
-eval_use_gpu=0
+eval_use_gpu=1
 eval_mode=max
 # Need to --compute_wer 1 --eval_mode max to be sure the user knows all the metrics
 # are for the all mode.
@@ -62,7 +62,7 @@ suffix=wav${sr_string}k/$mode
 
 base_dir=$storage_dir/$suffix/
 metadata_segment=metadata
-train_segment=train-360
+train_segment=train
 valid_segment=dev
 test_segment=test
 
@@ -139,44 +139,7 @@ if [[ $stage -le 3 ]]; then
 
   $python_path eval-0.py \
     --exp_dir $expdir \
-	--n_save_ex 1 \
-	--base_dir $base_dir \
-	--metadata_dir $metadata_segment \
-	--test_segment $test_segment \
-  	--out_dir $out_dir \
-  	--use_gpu $eval_use_gpu \
-  	--compute_wer $compute_wer \
-  	--task $task | tee logs/eval_${tag}.log
-
-	cp logs/eval_${tag}.log $expdir/eval.log
-fi
-
-stage=5
-if [[ $stage -le 4 ]]; then
-	echo "Stage 4 : Evaluation on cv"
-
-	if [[ $compute_wer -eq 1 ]]; then
-	  if [[ $eval_mode != "max" ]]; then
-	    echo "Cannot compute WER without max mode. Start again with --stage 2 --compute_wer 1 --eval_mode max"
-	    exit 1
-	  fi
-
-    # Install espnet if not instaled
-    if ! python -c "import espnet" &> /dev/null; then
-        echo 'This recipe requires espnet. Installing requirements.'
-        $python_path -m pip install espnet_model_zoo
-        $python_path -m pip install jiwer
-        $python_path -m pip install tabulate
-    fi
-  fi
-  
-  storage_dir=/mnt/new_drive/datasets/Common2Mix
-  out_dir=commonmix
-  base_dir=$storage_dir/$suffix/
- 
-  $python_path eval-0_on_cv.py \
-    --exp_dir $expdir \
-	--n_save_ex 1 \
+	--n_save_ex -1 \
 	--base_dir $base_dir \
 	--metadata_dir $metadata_segment \
 	--test_segment $test_segment \

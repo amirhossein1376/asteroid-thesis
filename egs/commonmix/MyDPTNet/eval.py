@@ -1,14 +1,10 @@
 import os
 import random
-import numpy as np
 import soundfile as sf
 import torch
 import yaml
 import json
 import argparse
-
-import time
-
 import pandas as pd
 from tqdm import tqdm
 from pprint import pprint
@@ -21,7 +17,7 @@ from asteroid import DPTNet
 from asteroid.models import save_publishable
 from asteroid.utils import tensors_to_device
 from asteroid.dsp.normalization import normalize_estimates
-from asteroid.metrics import WERTrackerWavLM, MockWERTracker
+from asteroid.metrics import WERTracker, MockWERTracker
 
 
 parser = argparse.ArgumentParser()
@@ -51,18 +47,15 @@ parser.add_argument(
 )
 parser.add_argument("--exp_dir", default="exp/tmp", help="Experiment root")
 parser.add_argument(
-    "--n_save_ex", type=int, default=-1, help="Number of audio examples to save, -1 means all"
+    "--n_save_ex", type=int, default=10, help="Number of audio examples to save, -1 means all"
 )
 parser.add_argument(
     "--compute_wer", type=int, default=0, help="Compute WER using ESPNet's pretrained model"
 )
 
-# COMPUTE_METRICS = ["si_sdr", "sdr", "sir", "sar", "stoi"]
-COMPUTE_METRICS = []
+COMPUTE_METRICS = ["si_sdr", "sdr", "sir", "sar", "stoi"]
 ASR_MODEL_PATH = (
-    # "facebook/wav2vec2-base-960h"
-#     "patrickvonplaten/wavlm-libri-clean-100h-base-plus"
-    "/home/user01/codes/model_dpt_repr/checkpoint-85407"
+    "Shinji Watanabe/librispeech_asr_train_asr_transformer_e18_raw_bpe_sp_valid.acc.best"
 )
 
 
@@ -84,9 +77,8 @@ def main(conf):
     compute_metrics = update_compute_metrics(conf["compute_wer"], COMPUTE_METRICS)
     anno_df = pd.read_csv(Path("/mnt/new_drive/datasets/LibriSpeech/test_annotations.csv"))
     wer_tracker = (
-        MockWERTracker() if not conf["compute_wer"] else WERTrackerWavLM(ASR_MODEL_PATH, anno_df, conf["sample_rate"], use_gpu=conf["use_gpu"], get_cer=True)
+        MockWERTracker() if not conf["compute_wer"] else WERTracker(ASR_MODEL_PATH, anno_df)
     )
-    
     model_path = os.path.join(conf["exp_dir"], "best_model.pth")
     model = DPTNet.from_pretrained(model_path)
     # Handle device placement
@@ -115,16 +107,10 @@ def main(conf):
     series_list = []
     torch.no_grad().__enter__()
     for idx in tqdm(range(len(test_set))):
-        if idx > 5:
-            continue
         # Forward the network on the mixture.
         mix, sources, ids = test_set[idx]
-        
         mix, sources = tensors_to_device([mix, sources], device=model_device)
-        start_time = time.time()
-
         est_sources = model(mix.unsqueeze(0))
-        
         loss, reordered_sources = loss_func(est_sources, sources[None], return_est=True)
         mix_np = mix.cpu().data.numpy()
         sources_np = sources.cpu().data.numpy()
@@ -140,80 +126,68 @@ def main(conf):
         )
         utt_metrics["mix_path"] = test_set.mixture_path
         est_sources_np_normalized = normalize_estimates(est_sources_np, mix_np)
-        transcriptions, dic = wer_tracker(
-                                mix=mix_np,
-                                clean=sources_np,
-                                estimate=est_sources_np_normalized,
-                                wav_id=ids,
-                                sample_rate=conf["sample_rate"],
-                            )
-        
-        end_time = time.time()
-        utt_metrics["time"] = end_time - start_time
         utt_metrics.update(
-            **dic
+            **wer_tracker(
+                mix=mix_np,
+                clean=sources_np,
+                estimate=est_sources_np_normalized,
+                wav_id=ids,
+                sample_rate=conf["sample_rate"],
+            )
         )
-        
         series_list.append(pd.Series(utt_metrics))
 
         # Save some examples in a folder. Wav files and metrics as text.
         if idx in save_idx:
-            try:
-                local_save_dir = os.path.join(ex_save_dir, "ex_{}/".format(idx))
-                os.makedirs(local_save_dir, exist_ok=True)
-                with open(local_save_dir + "mixture.npy", 'wb') as f:
-                    np.save(f, mix_np)
-                
-                # Loop over the sources and estimates
-                for src_idx, src in enumerate(sources_np):
-                    with open(local_save_dir + "s{}.npy".format(src_idx), 'wb') as f:
-                        np.save(f, src) 
-                
-                for src_idx, est_src in enumerate(est_sources_np_normalized):
-                    with open(local_save_dir + "s{}_estimate.npy".format(src_idx), 'wb') as f:
-                        np.save(f, est_src) 
-                # Write local metrics to the example folder.
-                with open(local_save_dir + "metrics.json", "w") as f:
-                    json.dump(utt_metrics, f, indent=0)
-            except:
-                pass
-    # # Save all metrics to the experiment folder.
-    # all_metrics_df = pd.DataFrame(series_list)
-    # all_metrics_df.to_csv(os.path.join(eval_save_dir, "all_metrics.csv"))
+            local_save_dir = os.path.join(ex_save_dir, "ex_{}/".format(idx))
+            os.makedirs(local_save_dir, exist_ok=True)
+            sf.write(local_save_dir + "mixture.wav", mix_np, conf["sample_rate"])
+            # Loop over the sources and estimates
+            for src_idx, src in enumerate(sources_np):
+                sf.write(local_save_dir + "s{}.wav".format(src_idx), src, conf["sample_rate"])
+            for src_idx, est_src in enumerate(est_sources_np_normalized):
+                sf.write(
+                    local_save_dir + "s{}_estimate.wav".format(src_idx),
+                    est_src,
+                    conf["sample_rate"],
+                )
+            # Write local metrics to the example folder.
+            with open(local_save_dir + "metrics.json", "w") as f:
+                json.dump(utt_metrics, f, indent=0)
 
-    # if transcriptions != None:
-    #     all_transcriptions_df = pd.DataFrame(transcriptions)
-    #     all_transcriptions_df.to_csv(os.path.join(eval_save_dir, "all_transcriptions.csv"))
-    
-    # # Print and save summary metrics
-    # final_results = {}
-    # for metric_name in compute_metrics:
-    #     input_metric_name = "input_" + metric_name
-    #     ldf = all_metrics_df[metric_name] - all_metrics_df[input_metric_name]
-    #     final_results[metric_name] = all_metrics_df[metric_name].mean()
-    #     final_results[metric_name + "_imp"] = ldf.mean()
+    # Save all metrics to the experiment folder.
+    all_metrics_df = pd.DataFrame(series_list)
+    all_metrics_df.to_csv(os.path.join(eval_save_dir, "all_metrics.csv"))
 
-    # print("Overall metrics :")
-    # pprint(final_results)
-    # if conf["compute_wer"]:
-    #     print("\nWER report")
-    #     wer_card = wer_tracker.final_report_as_markdown()
-    #     print(wer_card)
-    #     # Save the report
-    #     with open(os.path.join(eval_save_dir, "final_wer.md"), "w") as f:
-    #         f.write(wer_card)
+    # Print and save summary metrics
+    final_results = {}
+    for metric_name in compute_metrics:
+        input_metric_name = "input_" + metric_name
+        ldf = all_metrics_df[metric_name] - all_metrics_df[input_metric_name]
+        final_results[metric_name] = all_metrics_df[metric_name].mean()
+        final_results[metric_name + "_imp"] = ldf.mean()
 
-    # with open(os.path.join(eval_save_dir, "final_metrics.json"), "w") as f:
-    #     json.dump(final_results, f, indent=0)
-    
-    # model_dict = torch.load(model_path, map_location="cpu")
-    # os.makedirs(os.path.join(conf["exp_dir"], "publish_dir"), exist_ok=True)
-    # publishable = save_publishable(
-    #     os.path.join(conf["exp_dir"], "publish_dir"),
-    #     model_dict,
-    #     metrics=final_results,
-    #     train_conf=train_conf,
-    # )
+    print("Overall metrics :")
+    pprint(final_results)
+    if conf["compute_wer"]:
+        print("\nWER report")
+        wer_card = wer_tracker.final_report_as_markdown()
+        print(wer_card)
+        # Save the report
+        with open(os.path.join(eval_save_dir, "final_wer.md"), "w") as f:
+            f.write(wer_card)
+
+    with open(os.path.join(eval_save_dir, "final_metrics.json"), "w") as f:
+        json.dump(final_results, f, indent=0)
+
+    model_dict = torch.load(model_path, map_location="cpu")
+    os.makedirs(os.path.join(conf["exp_dir"], "publish_dir"), exist_ok=True)
+    publishable = save_publishable(
+        os.path.join(conf["exp_dir"], "publish_dir"),
+        model_dict,
+        metrics=final_results,
+        train_conf=train_conf,
+    )
 
 
 if __name__ == "__main__":

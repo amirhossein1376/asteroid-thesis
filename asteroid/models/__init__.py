@@ -6,7 +6,7 @@ from .dcunet import DCUNet
 from .dprnn_tasnet import DPRNNTasNet
 from .sudormrf import SuDORMRFImprovedNet, SuDORMRFNet
 from .dptnet import DPTNet
-from .my_dptnet import MyDPTNet
+from .my_dptnet_9 import My9DPTNet
 from .fasnet import FasNetTAC
 from .lstm_tasnet import LSTMTasNet
 from .demask import DeMask

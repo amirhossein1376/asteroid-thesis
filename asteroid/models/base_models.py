@@ -114,7 +114,7 @@ class BaseModel(torch.nn.Module):
             conf = torch.load(cached_model, map_location="cpu")
         else:
             conf = pretrained_model_conf_or_path
-
+        
         if "model_name" not in conf.keys():
             raise ValueError(
                 "Expected config dictionary to have field "

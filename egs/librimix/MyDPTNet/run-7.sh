@@ -23,11 +23,11 @@ python_path=python
 # ./run.sh --stage 3 --tag my_tag --task sep_noisy --id 0,1
 
 # General
-stage=0  # Controls from which stage to start
+stage=3  # Controls from which stage to start
 tag="try-7"  # Controls the directory name associated to the experiment
 # You can ask for several GPUusing id (passed to CUDA_VISIBLE_DEVICES)
 id=0
-out_dir=librimix # Controls the directory name associated to the evaluation results inside the experiment directory
+out_dir=librimix_repr_2 # Controls the directory name associated to the evaluation results inside the experiment directory
 
 # Network config
 
@@ -50,7 +50,7 @@ segment=3 # Minimum required seconds for each file
 task=sep_clean #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep_noisy'
 
 
-eval_use_gpu=1
+eval_use_gpu=0
 # Need to --compute_wer 1 --eval_mode max to be sure the user knows all the metrics
 # are for the all mode.
 compute_wer=1
@@ -143,6 +143,7 @@ if [[ $stage -le 3 ]]; then
     --exp_dir $expdir \
 	--base_dir $base_dir \
 	--metadata_dir $metadata_segment \
+	--n_save_ex 1 \
 	--test_segment $test_segment \
   	--out_dir $out_dir \
   	--use_gpu $eval_use_gpu \

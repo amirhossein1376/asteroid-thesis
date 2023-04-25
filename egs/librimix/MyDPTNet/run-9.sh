@@ -22,8 +22,8 @@ python_path=python
 # ./run.sh --stage 3 --tag my_tag --task sep_noisy --id 0,1
 
 # General
-stage=3  # Controls from which stage to start
-tag="try-0"  # Controls the directory name associated to the experiment
+stage=0  # Controls from which stage to start
+tag="try-9"  # Controls the directory name associated to the experiment
 # You can ask for several GPUs using id (passed to CUDA_VISIBLE_DEVICES)
 id=0
 out_dir=librimix # Controls the directory name associated to the evaluation results inside the experiment directory
@@ -31,14 +31,14 @@ out_dir=librimix # Controls the directory name associated to the evaluation resu
 # Network config
 
 # Training config
-epochs=200
+epochs=150
 batch_size=32
 num_workers=10
 half_lr=yes
 early_stop=yes
 # Optim config
 optimizer=adam
-lr=0.001
+lr=0.0001
 weight_decay=0.
 # Data config
 sample_rate=16000
@@ -48,11 +48,11 @@ segment=3 # Minimum required seconds for each file
 task=sep_clean #enh_single  # one of 'enh_single', 'enh_both', 'sep_clean', 'sep_noisy'
 
 
-eval_use_gpu=0
+eval_use_gpu=1
 eval_mode=max
 # Need to --compute_wer 1 --eval_mode max to be sure the user knows all the metrics
 # are for the all mode.
-compute_wer=1
+compute_wer=0
 
 . utils/parse_options.sh
 
@@ -94,7 +94,7 @@ echo "Results from the following experiment will be stored in $expdir"
 if [[ $stage -le 2 ]]; then
   echo "Stage 2: Training"
   mkdir -p logs
-  CUDA_VISIBLE_DEVICES=$id $python_path train-0.py --exp_dir $expdir \
+  CUDA_VISIBLE_DEVICES=$id $python_path train-9.py --exp_dir $expdir \
 		--epochs $epochs \
 		--batch_size $batch_size \
 		--num_workers $num_workers \
@@ -151,7 +151,6 @@ if [[ $stage -le 3 ]]; then
 	cp logs/eval_${tag}.log $expdir/eval.log
 fi
 
-stage=5
 if [[ $stage -le 4 ]]; then
 	echo "Stage 4 : Evaluation on cv"
 

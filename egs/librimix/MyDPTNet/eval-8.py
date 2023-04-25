@@ -13,7 +13,7 @@ from pathlib import Path
 from asteroid.metrics import get_metrics
 from asteroid.data import MyLibriMix
 from asteroid.losses import PITLossWrapper, pairwise_neg_sisdr
-from asteroid import DPTNet
+from asteroid import MyDPTNet
 from asteroid.models import save_publishable
 from asteroid.utils import tensors_to_device
 from asteroid.dsp.normalization import normalize_estimates
@@ -47,7 +47,7 @@ parser.add_argument(
 )
 parser.add_argument("--exp_dir", default="exp/tmp", help="Experiment root")
 parser.add_argument(
-    "--n_save_ex", type=int, default=10, help="Number of audio examples to save, -1 means all"
+    "--n_save_ex", type=int, default=-1, help="Number of audio examples to save, -1 means all"
 )
 parser.add_argument(
     "--compute_wer", type=int, default=0, help="Compute WER using ESPNet's pretrained model"
@@ -77,10 +77,10 @@ def main(conf):
     compute_metrics = update_compute_metrics(conf["compute_wer"], COMPUTE_METRICS)
     anno_df = pd.read_csv(Path("/mnt/new_drive/datasets/LibriSpeech/test_annotations.csv"))
     wer_tracker = (
-        MockWERTracker() if not conf["compute_wer"] else WERTrackerWavLM(ASR_MODEL_PATH, anno_df, conf["sample_rate"], process_before_transcription=True)
+        MockWERTracker() if not conf["compute_wer"] else WERTrackerWavLM(ASR_MODEL_PATH, anno_df, conf["sample_rate"])
     )
     model_path = os.path.join(conf["exp_dir"], "best_model.pth")
-    model = DPTNet.from_pretrained(model_path)
+    model = MyDPTNet.from_pretrained(model_path)
     # Handle device placement
     if conf["use_gpu"]:
         model.cuda()
@@ -106,7 +106,7 @@ def main(conf):
     save_idx = random.sample(range(len(test_set)), conf["n_save_ex"])
     series_list = []
     torch.no_grad().__enter__()
-    for idx in tqdm(range(len(test_set))):
+    for idx in tqdm(range(len(test_set)//50)):
         # Forward the network on the mixture.
         mix, sources, ids = test_set[idx]
         mix, sources = tensors_to_device([mix, sources], device=model_device)

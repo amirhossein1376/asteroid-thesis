@@ -13,7 +13,7 @@ masknet:
   chunk_size: 100
   hop_size: 50
   n_repeats: 2
-  mask_act: 'softmax'
+  mask_act: 'sigmoid'
   bidirectional: true
   dropout: 0
 # Training config

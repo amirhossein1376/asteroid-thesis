@@ -5,10 +5,11 @@ import traceback
 from typing import List
 from collections import Counter
 import pandas as pd
-from transformers import WavLMForCTC, Wav2Vec2Processor
+from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor, WavLMForCTC
 import numpy as np
 from pb_bss_eval import InputMetrics, OutputMetrics
 import torch.nn as nn
+import time
 
 from .utils import average_arrays_in_dic
 
@@ -208,7 +209,7 @@ class MockWERTracker:
         pass
 
     def __call__(self, *args, **kwargs):
-        return dict()
+        return None, dict()
 
     def final_report_as_markdown(self):
         return ""
@@ -438,14 +439,19 @@ class WERTrackerWavLM:
         use_gpu (bool): Whether to use GPU for forward caculation.
     """
 
-    def __init__(self, model_name, trans_df, sample_rate, process_before_transcription=False, use_gpu=True):
+    def __init__(self, model_name, trans_df, sample_rate, process_before_transcription=False, use_gpu=True, get_cer=False):
         
         import jiwer
 
+        self.get_cer = get_cer
         self.model_name = model_name
         self.device = "cuda" if use_gpu else "cpu"
-        self.model = WavLMForCTC.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-base-plus").to(self.device)
-        self.processor = Wav2Vec2Processor.from_pretrained("patrickvonplaten/wavlm-libri-clean-100h-base-plus")
+        if "wavlm" in model_name:
+            self.model = WavLMForCTC.from_pretrained(model_name).to(self.device)
+        else:
+            self.model = Wav2Vec2ForCTC.from_pretrained(model_name).to(self.device)
+            
+        self.processor = Wav2Vec2Processor.from_pretrained(model_name)
         self.input_txt_list = []
         self.clean_txt_list = []
         self.output_txt_list = []
@@ -458,14 +464,24 @@ class WERTrackerWavLM:
         self.mix_counter = Counter()
         self.clean_counter = Counter()
         self.est_counter = Counter()
-        self.transformation = jiwer.Compose(
-            [
-                jiwer.ToLowerCase(),
-                jiwer.RemovePunctuation(),
-                jiwer.RemoveMultipleSpaces(),
-                jiwer.Strip(),
-                jiwer.ReduceToListOfListOfWords(),
-            ]
+        if self.get_cer:
+            self.transformation = jiwer.Compose(
+                [
+                    jiwer.ToLowerCase(),
+                    jiwer.RemovePunctuation(),
+                    jiwer.RemoveMultipleSpaces(),
+                    jiwer.Strip(),
+                    jiwer.transforms.ReduceToListOfListOfChars(),
+                ])
+        else:
+            self.transformation = jiwer.Compose(
+                [
+                    jiwer.ToLowerCase(),
+                    jiwer.RemovePunctuation(),
+                    jiwer.RemoveMultipleSpaces(),
+                    jiwer.Strip(),
+                    jiwer.ReduceToListOfListOfWords(),
+                ] 
         )
 
     def __call__(
@@ -498,34 +514,36 @@ class WERTrackerWavLM:
             trans_dict["truth"][f"txt_{i}"] = self.trans_dic[tmp_id]
             self.true_txt_list.append(dict(utt_id=tmp_id, text=self.trans_dic[tmp_id]))
         # Mixture
-        for tmp_id in wav_id:
-            out_count = Counter(
-                self.hsdi(
-                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+        if False:
+            for tmp_id in wav_id:
+                out_count = Counter(
+                    self.hsdi(
+                        truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation, get_cer=self.get_cer
+                    )
                 )
-            )
-            self.mix_counter += out_count
-            local_mix_counter += out_count
-            self.input_txt_list.append(dict(utt_id=tmp_id, text=txt))
-        # Average WER for the clean pair
-        for i, (wav, tmp_id) in enumerate(zip(clean, wav_id)):
-            txt = self.predict_hypothesis(wav)
-            out_count = Counter(
-                self.hsdi(
-                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+                self.mix_counter += out_count
+                local_mix_counter += out_count
+                self.input_txt_list.append(dict(utt_id=tmp_id, text=txt))
+            # Average WER for the clean pair
+        if False:
+            for i, (wav, tmp_id) in enumerate(zip(clean, wav_id)):
+                txt = self.predict_hypothesis(wav)
+                out_count = Counter(
+                    self.hsdi(
+                        truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation, get_cer=self.get_cer
+                    )
                 )
-            )
-            self.clean_counter += out_count
-            local_clean_counter += out_count
-            self.clean_txt_list.append(dict(utt_id=tmp_id, text=txt))
-            trans_dict["clean"][f"utt_id_{i}"] = tmp_id
-            trans_dict["clean"][f"txt_{i}"] = txt
+                self.clean_counter += out_count
+                local_clean_counter += out_count
+                self.clean_txt_list.append(dict(utt_id=tmp_id, text=txt))
+                trans_dict["clean"][f"utt_id_{i}"] = tmp_id
+                trans_dict["clean"][f"txt_{i}"] = txt
         # Average WER for the estimate pair
         for i, (est, tmp_id) in enumerate(zip(estimate, wav_id)):
             txt = self.predict_hypothesis(est)
             out_count = Counter(
                 self.hsdi(
-                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation
+                    truth=self.trans_dic[tmp_id], hypothesis=txt, transformation=self.transformation, get_cer=self.get_cer
                 )
             )
             self.est_counter += out_count
@@ -534,30 +552,45 @@ class WERTrackerWavLM:
             trans_dict["estimates"][f"utt_id_{i}"] = tmp_id
             trans_dict["estimates"][f"txt_{i}"] = txt
         self.transcriptions.append(trans_dict)
-        return dict(
-            input_wer=self.wer_from_hsdi(**dict(local_mix_counter)),
-            clean_wer=self.wer_from_hsdi(**dict(local_clean_counter)),
+        return self.transcriptions, dict(
+            # input_wer=self.wer_from_hsdi(**dict(local_mix_counter)),
+            # clean_wer=self.wer_from_hsdi(**dict(local_clean_counter)),
             wer=self.wer_from_hsdi(**dict(local_est_counter)),
         )
 
     @staticmethod
-    def wer_from_hsdi(hits=0, substitutions=0, deletions=0, insertions=0):
+    def wer_from_hsdi(hits=0, substitutions=0, deletions=0, insertions=0, **args):
         wer = (substitutions + deletions + insertions) / (hits + substitutions + deletions)
         return wer
 
     @staticmethod
-    def hsdi(truth, hypothesis, transformation):
-        from jiwer import compute_measures
-        keep = ["hits", "substitutions", "deletions", "insertions"]
-        out = compute_measures(
-            truth=truth,
-            hypothesis=hypothesis,
-            truth_transform=transformation,
-            hypothesis_transform=transformation,
-        ).items()
-        return {k: v for k, v in out if k in keep}
+    def hsdi(truth, hypothesis, transformation, get_cer):
+        if get_cer:
+            from jiwer import cer
+
+            keep = ["hits", "substitutions", "deletions", "insertions"]
+            out = cer(
+                truth=truth,
+                hypothesis=hypothesis,
+                truth_transform=transformation,
+                hypothesis_transform=transformation,
+                return_dict=True
+            ).items()
+            return {k: v for k, v in out if k in keep} 
+        else:
+            from jiwer import compute_measures
+
+            keep = ["hits", "substitutions", "deletions", "insertions"]
+            out = compute_measures(
+                truth=truth,
+                hypothesis=hypothesis,
+                truth_transform=transformation,
+                hypothesis_transform=transformation,
+            ).items()
+            return {k: v for k, v in out if k in keep}
 
     def predict_hypothesis(self, wav):
+        t1 = time.time()
         if self.process_before_transcription:
             wav = self.processor(wav, sampling_rate=self.sample_rate, return_tensors="pt").input_values[0].to(self.device)
         else:
